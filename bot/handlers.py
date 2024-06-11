@@ -1,168 +1,128 @@
-from pyrogram import Client, filters
-from pyrogram.types import CallbackQuery, Message
+from pyrogram.types import Message
+from pyrogram import Client
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db import create_user, get_user__by_id, get_user__by_login
+from factory import task_inline_factory
 from constants import (
-    REGISTER_KEYBOARD_MARKUP,
-    REPLY_KEYBOARD_MARKUP,
+    MANAGE_TASK_INLINE_KEYBOAR_MARKUP,
+    NO_TASKS_INLINE_KEYBOAR_MARKUP,
     TASKS_INLINE_KEYBOAR_MARKUP,
 )
-from tasks_handler import (
-    handle_create_task,
-    handle_default,
-    handle_delete_task,
-    handle_task_description,
-    handle_update_task_status,
-    handle_view_tasks,
+from db import (
+    create_task,
+    delete_task,
+    get_task__by_title,
+    get_tasks,
+    update_task_status,
 )
 
 
-async def setup_handlers(client: Client, session_factory: AsyncSession) -> None:
+async def handle_create_task(
+    client: Client,
+    message: Message,
+    user_id: int,
+    session_factory: AsyncSession,
+    **kwargs,
+) -> None:
     """
-    Sets up message and callback handlers for the bot.
+    Handles the creation of a task.
     """
 
-    @client.on_message(filters.command("start"))
-    async def start(client: Client, message: Message) -> None:
-        """
-        Handles the '/start' command.
+    title = await client.ask(message.chat.id, "Введите название задачи: ")
+    description = await client.ask(message.chat.id, "Введите описание задачи: ")
 
-        Sends a welcome message to the user and prompts them to register.
-        """
-        user = await get_user__by_id(
-            user_id=message.from_user.id, session_factory=session_factory
-        )
+    await create_task(
+        telegram_id=user_id,
+        title=title.text,
+        description=description.text,
+        session_factory=session_factory,
+    )
 
-        if user:
-            await message.reply(
-                f"Здравствуйте, {user.username}! Вы уже зарегистрированы.",
-                reply_markup=REPLY_KEYBOARD_MARKUP,
-            )
+    await message.reply(
+        "Задача успешно создана!", reply_markup=TASKS_INLINE_KEYBOAR_MARKUP
+    )
 
-            await message.reply(
-                f"Выберите одну из команд:",
-                reply_markup=TASKS_INLINE_KEYBOAR_MARKUP,
-            )
-        else:
-            await message.reply(
-                "Здравствуйте! Зарегистрируйтесь с помощью меню.",
-                reply_markup=REGISTER_KEYBOARD_MARKUP,
-            )
 
-    @client.on_message(filters.command("register"))
-    async def register(client: Client, message: Message) -> None:
-        """
-        Handles the '/register' command.
+async def handle_view_tasks(
+    message: Message,
+    user_id: int,
+    is_done: bool,
+    session_factory: AsyncSession,
+    **kwargs,
+) -> None:
+    """
+    Handles viewing tasks.
+    """
 
-        Prompts the user to enter their name and a unique login. Registers the user if the login is available.
-        """
+    tasks = await get_tasks(
+        telegram_id=user_id,
+        session_factory=session_factory,
+        is_done=is_done,
+    )
 
-        username = await client.ask(message.chat.id, "Введите ваше имя:")
-        login = await client.ask(
-            message.chat.id, "Отлично! Сейчас введите уникальный логин:"
-        )
-
-        if username and login:
-            username, login = username.text, login.text
-
-        user = await get_user__by_login(login=login, session_factory=session_factory)
-
-        if user:
-            await message.reply("Этот логин уже используется. Используйте другой:")
-            return
-
-        await create_user(
-            username=username,
-            login=login,
-            user_id=message.from_user.id,
-            session_factory=session_factory,
-        )
-
+    if tasks:
         await message.reply(
-            f"Спасибо за регистрацию, {username}!", reply_markup=REPLY_KEYBOARD_MARKUP
+            "Список задач!", reply_markup=task_inline_factory(tasks=tasks)
         )
-
+    else:
         await message.reply(
-            "Выберите одну из опций ниже:", reply_markup=TASKS_INLINE_KEYBOAR_MARKUP
+            "У вас нет задач!", reply_markup=NO_TASKS_INLINE_KEYBOAR_MARKUP
         )
 
-    @client.on_message(filters.command("create_task"))
-    async def create_task(client: Client, message: Message) -> None:
-        """
-        Handles the '/create_task' command.
 
-        Prompts the user to create a new task.
-        """
-        user = await get_user__by_id(
-            user_id=message.from_user.id, session_factory=session_factory
-        )
+async def handle_update_task_status(
+    message: Message, user_id: int, session_factory: AsyncSession, **kwargs
+) -> None:
+    """
+    Handles updating task status.
+    """
 
-        await handle_create_task(
-            client=client,
-            message=message,
-            user_id=user.telegram_id,
-            session_factory=session_factory,
-        )
+    await update_task_status(
+        session_factory=session_factory, telegram_id=user_id, title=message.text
+    )
 
-    @client.on_message(filters.command(["completed_tasks", "non_completed_tasks"]))
-    async def non_completed_tasks(client: Client, message: Message) -> None:
-        """
-        Handles the '/completed_tasks' and '/non_completed_tasks' commands.
+    await message.reply(
+        "Задача успешно обновлена!", reply_markup=TASKS_INLINE_KEYBOAR_MARKUP
+    )
 
-        Displays either completed or non-completed tasks based on the command.
-        """
-        user = await get_user__by_id(
-            user_id=message.from_user.id, session_factory=session_factory
-        )
 
-        command = message.command[0]
-        is_done = command == "completed_tasks"
+async def handle_delete_task(
+    message: Message, user_id: int, session_factory: AsyncSession, **kwargs
+) -> None:
+    """
+    Handles deleting a task.
+    """
 
-        await handle_view_tasks(
-            message=message,
-            user_id=user.telegram_id,
-            is_done=is_done,
-            session_factory=session_factory,
-        )
+    await delete_task(
+        telegram_id=user_id,
+        task_title=message.text,
+        session_factory=session_factory,
+    )
 
-    @client.on_message(filters.text)
-    async def non_completed_tasks(client: Client, message: Message) -> None:
-        """
-        Handles messages with unknown commands.
+    await message.reply(
+        "Задача успешно удалена!", reply_markup=TASKS_INLINE_KEYBOAR_MARKUP
+    )
 
-        Replies to the user indicating that the command is not recognized.
-        """
-        await message.reply(
-            "Я не знаю такой команды, используйте одну из доступных:",
-            reply_markup=TASKS_INLINE_KEYBOAR_MARKUP,
-        )
 
-    @client.on_callback_query()
-    async def callback_task_handler(client, callback_query: CallbackQuery) -> None:
-        """
-        Handles callback queries from inline keyboards.
+async def handle_task_description(
+    message: Message, user_id: int, session_factory: AsyncSession, **kwargs
+) -> None:
+    """
+    Handles displaying the description of a task.
+    """
 
-        Routes the callback query to the appropriate handler based on the data.
-        """
+    task = await get_task__by_title(
+        telegram_id=user_id,
+        task_title=message.text,
+        session_factory=session_factory,
+    )
 
-        tasks_mapping = {
-            "create_task": handle_create_task,
-            "completed_tasks": handle_view_tasks,
-            "non_completed_tasks": handle_view_tasks,
-            "update_task_status": handle_update_task_status,
-            "delete_task": handle_delete_task,
-            "task_description": handle_task_description,
-        }
+    await message.reply(f"{task.description}", reply_markup=TASKS_INLINE_KEYBOAR_MARKUP)
 
-        task_handler = tasks_mapping.get(callback_query.data, handle_default)
-        is_done = callback_query.data == "completed_tasks"
 
-        return await task_handler(
-            client=client,
-            message=callback_query.message,
-            user_id=callback_query.from_user.id,
-            session_factory=session_factory,
-            data=callback_query.data,
-            is_done=is_done,
-        )
+async def handle_default(message: Message, data, **kwargs) -> None:
+    """
+    Handles default behavior related to task's name.
+    """
+
+    await message.reply(f"{data}", reply_markup=MANAGE_TASK_INLINE_KEYBOAR_MARKUP)

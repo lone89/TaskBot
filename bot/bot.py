@@ -5,7 +5,7 @@ from pyromod import Client
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from handlers import setup_handlers
+from commands import setup_handlers
 from models import init_db
 
 
